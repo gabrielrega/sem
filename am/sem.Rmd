@@ -1,0 +1,516 @@
+---
+title: "Estimação conjunta das 4 equações"
+author: Vítor Wilher, MSc in Economics
+date: "`r format(Sys.time(), '%d de %B, %Y')`"
+abstract: "Concluímos nessa subseção a estimação de um modelo semiestrutural de pequeno porte para a economia brasileira com a estimação conjunta das quatro equações vistas nas aulas anteriores."
+output: 
+  pdf_document:
+    toc: true
+    number_sections: true
+    includes:
+      in_header: header.tex
+geometry: margin=1in
+fontfamily: mathpazo
+fontsize: 11pt
+bibliography: 'references.bib'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+def.chunk.hook  <- knitr::knit_hooks$get("chunk")
+knitr::knit_hooks$set(chunk = function(x, options) {
+  x <- def.chunk.hook(x, options)
+  ifelse(options$size != "normalsize", paste0("\\", options$size,"\n\n", x, "\n\n \\normalsize"), x)
+})
+
+```
+
+
+\newpage
+# Introdução
+
+Nas aulas anteriores, vimos a estimação das quatro equações que compõem o modelo semiestrutural básico e representativo da economia brasileira. Para começar, estimamos uma Curva de Phillips como descrito abaixo:
+
+\begin{align}
+\pi_t^{livres} = \sum_{i>0} \beta_{1i} E_t \pi^{total}_{t+i} +\sum_{j>0} \beta_{2j} \pi^{total}_{t-j} +\sum_{k \geq 0} \beta_{3k} \pi^{importada}_{t-k} + \sum_{l>0} \beta_{4l} hiato_{t-l} + \sum_{m = 1}^4 D_m + \epsilon_t \label{cp}
+\end{align} 
+
+Basicamente, a inflação dos preços livres é uma função linear da **inflação passada**, das **expectativas de inflação**, do **hiato do produto** e da **inflação importada**. A seguir, estimamos uma Curva IS que representa o lado da demanda da economia e pode ser descrita como segue: 
+
+\begin{align}
+h_t = \gamma_0 + \sum_{i>0} \gamma_{1i} h_{t-1} + \sum_{j>0} \gamma_{2j} r_{t-j} +\sum_{k > 0} \gamma_{3k} \Delta sup_{t-k} + u_t \label{is}
+\end{align} 
+
+Basicamente, a Curva IS estimada irá descrever a dinâmica do hiato do produto com base em **suas próprias defasagens**, da **taxa de juros real ex-ante** e da **variação do superávit primário**. Na sequência, estimamos uma regra de Taylor que descreve o comportamento da autoridade monetária e pode ser descrita como segue:
+
+\begin{align}
+i_t = \alpha_0 + \alpha_1 i_{t-1} + \alpha_2 i_{t-2} + \alpha_3 (\pi_{t}^{e} - \pi^{M}) + \alpha_4 h_{t-1}  + v_t \label{taylor}
+\end{align} 
+
+Basicamente, a regra de Taylor a ser estimada relaciona a taxa básica de juros às suas próprias desagens - de modo a incorporar a suavização da taxa de juros ao longo do tempo e, econometricamente, previnir autocorrelação nos resídios -, a diferença entre a inflação projetada e a meta de inflação e uma medida de hiato do produto. Por fim, modelamos o prêmio do Swap pré-DI de 360 dias frente a taxa básica de juros, a Selic, por meio da seguinte equação:
+
+\begin{align}
+premio_t = \delta_0 + \sum_{i>0} \delta_{1i} premio_{t-i} + \delta_2 rispa_{t} + x_t
+\end{align} 
+
+Onde $premio_t$ é o diferencial entre a taxa swap pré-DI de 360 dias e a expectativa para a taxa Selic para o período do contrato do *swap*; $rispa_t$ é uma variável representativa do prêmio de risco do país (Embi ou CDS 5 anos, por exemplo); e $x_t$ é um termo de erro.^[A ideia é que na construção de cenários, a trajetória do *swap* depende fortemente da trajetória para a Selic.] 
+
+Já aqui, vamos mostrar a estimação conjunta dessas quatro equações. 
+
+\newpage
+# Pacotes
+
+Abaixo, carregamos os pacotes necessários para o exercício.^[O pacote `rbcb` não está mais disponível no CRAN, sendo necessário instalá-lo via `github` através do pacote `devtools`. Maiores detalhes, ver [aqui](https://github.com/wilsonfreitas/rbcb).]
+
+\bigskip
+
+```{r, echo=T, eval=T, results='markup', fig.cap='', fig.width=8, fig.height=4, fig.align='center', out.width=".7\\linewidth", warning=FALSE, message=FALSE, size='small'}
+
+library(devtools)
+library(tidyverse)
+library(lubridate)
+library(readxl)
+library(restriktor)
+library(RcppRoll)
+library(broom)
+library(scales)
+library(rbcb)
+library(xts)
+library(dynlm)
+library(systemfit)
+
+```
+
+# Importação e tratamento das variáveis
+
+Nessa parte do exercício, nós consolidamos a importação de todas as variáveis que utilizaremos para a estimação das equações. 
+
+## Importar expectativas de inflação
+
+O modelo representado por \ref{cp} será estimado em bases trimestrais. Desse modo, vamos precisar fazer algum tratamento dos dados. Para começar, importamos as expectativas de inflação em bases diárias e depois obtemos as expectativas diárias para os trimestres seguintes e, por fim, retiramos a média trimestral dessas expectativas. 
+
+\bigskip
+
+```{r, echo=T, eval=T, results='markup', fig.cap='', fig.width=8, fig.height=4, fig.align='center', out.width=".7\\linewidth", warning=FALSE, message=FALSE, size='small'}
+
+## Importar e Tratar Expectativas de Inflação
+exp_ipca <- get_monthly_market_expectations("IPCA", 
+                                            end_date = "2018-09-31")
+
+diff_quarter <- function(end_date, start_date){
+  
+  year_to_quarters <- (floor(end_date)*4 + (end_date %% 1)*10) - 
+    
+                      (floor(start_date)*4 + (start_date %% 1)*10)
+  
+  return(year_to_quarters)
+  
+}
+
+exp_ipca_aux <- exp_ipca %>%
+  
+  dplyr::select(date, reference_month, median) %>%
+  
+  dplyr::mutate(reference_month = lubridate::ymd(paste(reference_month, 
+                                                       "01", 
+                                                       sep = "-"))) %>%
+  
+  dplyr::mutate(date_year = lubridate::year(date),
+                date_month = lubridate::month(date)) %>%
+  
+  dplyr::group_by(date_year, date_month, reference_month) %>%
+  
+  dplyr::summarise(median_month = mean(median)) %>%
+  
+  dplyr::ungroup() %>%
+  
+  dplyr::mutate(date = lubridate::make_date(year = date_year, 
+                                            month = date_month)) %>%
+  
+  dplyr::select(date, reference_month, median_month) %>%
+  
+  dplyr::filter(date > "2001-12-01") %>%
+  
+  dplyr::mutate(ref_quarter = lubridate::quarter(reference_month, 
+                                                 with_year = T)) %>%
+  
+  dplyr::group_by(date, ref_quarter) %>%
+  
+  dplyr::summarise(median_quarter = last(((cumprod(1+(median_month/100)))-1)*100)) %>%
+  
+  dplyr::mutate(date_quarter = lubridate::quarter(date, with_year = T)) %>%
+  
+  dplyr::group_by(date_quarter, ref_quarter, add = F) %>%
+  
+  dplyr::summarise(median_quarter = mean(median_quarter)) %>%
+  
+  dplyr::filter(ref_quarter > date_quarter) %>%
+  
+  dplyr::mutate(diff = round(diff_quarter(ref_quarter, date_quarter)),1) %>%
+  
+  dplyr::select(-ref_quarter) %>%
+  
+  tidyr::spread(key = diff, value = median_quarter)
+
+colnames(exp_ipca_aux)[-1] <- paste("EInf_t+",
+                                    colnames(exp_ipca_aux)[-1], 
+                                    sep = "")
+
+
+```
+
+## Importar e tratar inflação total e de preços livres
+
+```{r, echo=T, eval=T, results='markup', fig.cap='', fig.width=8, fig.height=4, fig.align='center', out.width=".7\\linewidth", warning=FALSE, message=FALSE, size='small'}
+
+acum_quarter <- function(x){
+  
+  x_fac <- 1+(x/100)
+  
+  x_cum <- RcppRoll::roll_prodr(x_fac, n = 3)
+  
+  x_qr <- last((x_cum-1)*100)
+  
+  return(x_qr)
+  
+}
+
+dados_ipca <- read_csv2('ipca.csv',
+                        col_types = 
+                          list(col_date(format='%d/%m/%Y'),
+                               col_double(),
+                               col_double())) %>% 
+  
+  dplyr::mutate(date_quarter = lubridate::quarter(date, with_year = TRUE)) %>%
+  
+  dplyr::group_by(date_quarter) %>%
+  
+  dplyr::summarise_at(vars(ipca_total, ipca_livres), funs(acum_quarter))
+
+
+```
+
+## Importar e tratar IC-Br
+
+```{r, echo=T, eval=T, results='markup', fig.cap='', fig.width=8, fig.height=4, fig.align='center', out.width=".7\\linewidth", warning=FALSE, message=FALSE, size='small'}
+
+acum_ic <- function(x){
+  
+  x_diff <- log(x/first(x))*100
+  
+  x_acum <- last(x_diff)
+  
+  return(x_acum)
+  
+}
+
+dados_ic <- read_csv2('ic.csv',
+                        col_types = 
+                          list(col_date(format='%d/%m/%Y'),
+                               col_double())) %>% 
+  
+  dplyr::mutate(date_quarter = lubridate::quarter(date, with_year = TRUE)) %>%
+  
+  dplyr::group_by(date_quarter) %>%
+  
+  dplyr::summarise_at(vars(ic_br), funs(acum_ic))
+
+
+```
+
+## Importar o hiato do produto
+
+O hiato do produto é divulgado pelo IPEA em frequência trimestral e, logo, não necessita de transformações.
+
+```{r}
+
+hiato <- read_excel("hiato.xlsx") %>%
+  
+  dplyr::mutate(date_quarter = as.numeric(gsub(" T", ".", date_qr)),
+                hiato = hiato*100) %>%
+  
+  dplyr::select(date_quarter, hiato)
+
+```
+
+## Importar o resultado estrutural do setor público
+
+O resultado fiscal estrutural é divulgado em bases trimestrais pela Secretaria de Política Econômica (SPE) do Ministério da Fazenda. Nós importamos como abaixo.
+
+```{r, echo=T, eval=T, results='markup', fig.cap='', fig.width=8, fig.height=4, fig.align='center', out.width=".7\\linewidth", warning=FALSE, message=FALSE, size='small'}
+
+sup <- read_excel("sup.xlsx") %>%
+  
+  dplyr::mutate(date_quarter = as.numeric(gsub(" T", ".", date_qr)),
+                sup = sup*100) %>%
+  
+  dplyr::select(date_quarter, sup)
+  
+dsup = diff(sup$sup)
+dsup = tibble(date_quarter=sup$date_quarter[-1], dsup=dsup)
+```
+
+## Construir o juro real
+
+```{r, echo=T, eval=T, results='markup', fig.cap='', fig.width=8, fig.height=4, fig.align='center', out.width=".7\\linewidth", warning=FALSE, message=FALSE, size='small'}
+
+juro = read_excel('juro.xlsx',
+                  col_types = c('date', rep('numeric',2)))
+juroreal = (((1+(juro$swap/100))/(1+(juro$expinf/100)))-1)*100
+juroreal = xts(juroreal, order.by=juro$date) 
+juroreal = apply.quarterly(juroreal, FUN=mean)
+juroreal = tibble(date_quarter=sup$date_quarter, juroreal=juroreal)
+
+```
+
+## Importar a taxa Selic
+
+Abaixo, começamos importando a taxa básica de juros que é calibrada pelo Banco Central.
+
+```{r, echo=T, eval=T, results='markup', fig.cap='', fig.width=8, fig.height=4, fig.align='center', out.width=".7\\linewidth", warning=FALSE, message=FALSE, size='small'}
+
+selic <- read_excel("selic.xlsx")
+selic = xts(selic$selic, order.by = selic$date)
+selic = apply.quarterly(selic, FUN=mean)
+selic = window(selic, start='2002-03-01', end='2017-12-01')
+selic = tibble(date_quarter=sup$date_quarter, selic=selic)
+
+```
+
+## Criar desvio entre inflação esperada e meta de inflação
+
+Assim como fizemos ao construir e estimar a Curva de Phillips, nós vamos importar e tratar as expectativas de inflação. 
+
+\bigskip
+
+```{r, echo=T, eval=T, results='markup', fig.cap='', fig.width=8, fig.height=4, fig.align='center', out.width=".7\\linewidth", warning=FALSE, message=FALSE, size='small'}
+
+## Importar e Tratar Expectativas de Inflação
+exp_ipca <- get_twelve_months_inflation_expectations("IPCA", 
+                                            end_date = "2017-12-31")
+
+exp_ipca_d = xts(exp_ipca$mean, order.by = exp_ipca$date)
+exp_ipca_q = apply.quarterly(exp_ipca_d, FUN=mean)
+
+meta_ahead <- read_excel("meta_ahead.xlsx")
+
+meta_ahead = xts(meta_ahead$meta_ahead, order.by = meta_ahead$date)
+meta_ahead = apply.quarterly(meta_ahead, FUN=mean)
+
+exp_ipca_q = ts(exp_ipca_q, start=c(2001,4), freq=4)
+meta_ahead = ts(meta_ahead, start=c(2000, 1), freq=4)
+
+desvio = exp_ipca_q - meta_ahead
+desvio = window(desvio, start=c(2002,01))
+desvio = tibble(date_quarter=sup$date_quarter, desvio=desvio)
+```
+
+## Importar o swap pré-DI 360 dias
+
+Abaixo, começamos importando a taxa básica de juros que é calibrada pelo Banco Central.
+
+```{r, echo=T, eval=T, results='markup', fig.cap='', fig.width=8, fig.height=4, fig.align='center', out.width=".7\\linewidth", warning=FALSE, message=FALSE, size='small'}
+
+swap <- read_excel("swap.xlsx")
+swap = xts(swap$swap, order.by = swap$date)
+swap = apply.quarterly(swap, FUN=mean)
+
+
+```
+
+## Criar selic esperada 4 trimestres à frente
+
+O maior trabalho para estimar a nossa equação é criar a selic esperada 4 trimestres à frente. O código abaixo implementa.
+
+\bigskip
+
+```{r, echo=T, eval=T, results='markup', fig.cap='', fig.width=8, fig.height=4, fig.align='center', out.width=".7\\linewidth", warning=FALSE, message=FALSE, size='small'}
+
+## Importar e Tratar Expectativas para Selic
+exp_selic <- get_monthly_market_expectations("Meta para taxa over-selic", end_date = "2018-09-31")
+
+diff_quarter <- function(end_date, start_date){
+  
+  year_to_quarters <- (floor(end_date)*4 + (end_date %% 1)*10) - 
+    
+                      (floor(start_date)*4 + (start_date %% 1)*10)
+  
+  return(year_to_quarters)
+  
+}
+
+exp_selic_aux <- exp_selic %>%
+  
+  dplyr::select(date, reference_month, median) %>%
+  
+  dplyr::mutate(reference_month = lubridate::ymd(paste(reference_month, 
+                                                       "01", 
+                                                       sep = "-"))) %>% 
+  
+  dplyr::mutate(date_year = lubridate::year(date),
+                date_month = lubridate::month(date)) %>%
+  
+  dplyr::group_by(date_year, date_month, reference_month) %>% 
+  
+  dplyr::summarise(median_month = mean(median)) %>%
+  
+  dplyr::ungroup() %>%
+  
+  dplyr::mutate(date = lubridate::make_date(year = date_year, 
+                                            month = date_month)) %>%
+  
+  dplyr::select(date, reference_month, median_month) %>%
+  
+  dplyr::filter(date > "2001-12-01") %>%
+  
+  dplyr::mutate(ref_quarter = lubridate::quarter(reference_month, 
+                                                 with_year = T)) %>%
+  
+  dplyr::group_by(date, ref_quarter) %>%  
+  
+  dplyr::summarise(median_quarter = mean(median_month)) %>%
+  
+  dplyr::mutate(date_quarter = lubridate::quarter(date, with_year = T)) %>% 
+  
+  dplyr::group_by(date_quarter, ref_quarter, add = F) %>%
+  
+  dplyr::summarise(median_quarter = mean(median_quarter)) %>%
+  
+  dplyr::filter(ref_quarter > date_quarter) %>%
+  
+  dplyr::mutate(diff = round(diff_quarter(ref_quarter, date_quarter)),1) %>%
+  
+  dplyr::select(-ref_quarter) %>%
+  
+  tidyr::spread(key = diff, value = median_quarter) 
+
+colnames(exp_selic_aux)[-1] <- paste("ESelic_t+",
+                                    colnames(exp_selic_aux)[-1], 
+                                    sep = "")
+
+
+
+```
+
+## Criar o prêmio entre o swap e a selic esperada
+
+```{r, echo=T, eval=T, results='markup', fig.cap='', fig.width=8, fig.height=4, fig.align='center', out.width=".7\\linewidth", warning=FALSE, message=FALSE, size='small'}
+
+swap = ts(swap, start=c(1999,3), freq=4)
+selice = ts(exp_selic_aux$`ESelic_t+4`, start=c(2002,01), freq=4)
+data = ts.intersect(swap, selice)
+premio = data[,1]-data[,2]
+premio = window(premio, end=c(2017,4))
+premio = tibble(date_quarter=sup$date_quarter, premio=premio)
+
+```
+
+## Importar o risco país
+
+Agora, importamos o EMBI, que irá medir o risco país.
+
+```{r, echo=T, eval=T, results='markup', fig.cap='', fig.width=8, fig.height=4, fig.align='center', out.width=".7\\linewidth", warning=FALSE, message=FALSE, size='small'}
+
+embi <- read_excel("embi.xlsx")
+embi = xts(embi$embi, order.by = embi$date)
+embi = embi[complete.cases(embi)]
+embi = apply.quarterly(embi, FUN=mean)
+risco_pais = ts(embi, start=c(1994,2), freq=4)
+risco_pais = window(risco_pais, start=c(2002,01), end=c(2017,04))
+risco_pais = tibble(date_quarter=sup$date_quarter, 
+                    risco_pais=risco_pais)
+```
+
+## Reunir os dados
+
+```{r, echo=T, eval=T, results='markup', fig.cap='', fig.width=8, fig.height=4, fig.align='center', out.width=".7\\linewidth", warning=FALSE, message=FALSE, size='small'}
+
+dados_reg <- dplyr::inner_join(dados_ipca, dados_ic) %>% 
+  
+  dplyr::inner_join(hiato) %>% 
+  
+  dplyr::inner_join(exp_ipca_aux) %>%
+  
+  dplyr::inner_join(juroreal) %>%
+  
+  dplyr::inner_join(dsup) %>%
+  
+  dplyr::inner_join(selic) %>%
+  
+  dplyr::inner_join(desvio) %>%
+  
+  dplyr::inner_join(premio) %>%
+  
+  dplyr::inner_join(risco_pais) %>%
+  
+  dplyr::mutate(quarter = sub('.*\\.', '', date_quarter)) %>%
+  
+  dplyr::filter(date_quarter >= 2002.1) %>%
+  
+  dplyr::mutate(ipca_l1 = lag(ipca_total, 1),
+                ipca_l2 = lag(ipca_total, 2),
+                ipca_l3 = lag(ipca_total, 3),
+                hiato_l1 = lag(hiato,1),
+                hiato_l2 = lag(hiato,2),
+                hiato_l3 = lag(hiato, 3),
+                ic_l1 = lag(ic_br,1),
+                ic_l2 = lag(ic_br,2),
+                Einf_1 = `EInf_t+1`,
+                juroreal_l1 = lag(juroreal,1),
+                juroreal_l2 = lag(juroreal,2),
+                selic_l1 = lag(selic,1),
+                selic_l2 = lag(selic,2),
+                selic_l3 = lag(selic,3),
+                premio_l1 = lag(premio,1),
+                premio_l2 = lag(premio,2),
+                risco_pais_l1 = lag(risco_pais,1))
+
+
+```
+
+# Escrever as equações
+
+Uma vez que todas as variáveis foram importadas, podemos agora escrever as equações.
+
+\bigskip
+
+```{r, echo=T, eval=T, results='markup', fig.cap='', fig.width=8, fig.height=4, fig.align='center', out.width=".7\\linewidth", warning=FALSE, message=FALSE, size='small'}
+
+cp = ipca_livres ~ ipca_l1 + ipca_l2 + Einf_1 + hiato_l3 + ic_l1 +
+  quarter
+
+is = hiato ~ hiato_l1 + juroreal_l1 + dsup
+
+taylor = selic ~ selic_l1 + selic_l2 + desvio + hiato_l1
+
+premio_swap = premio ~ premio_l1 + risco_pais
+
+inst = ~ipca_l1 + ipca_l2 + ipca_l3 + Einf_1 + hiato_l2 + ic_l2 +
+  quarter + hiato_l1 + juroreal_l2 + dsup + selic_l1 + selic_l2 +
+  selic_l3 + desvio + premio_l2 + risco_pais_l1
+
+system = list(cp=cp, is=is, taylor=taylor, premioswap=premio_swap)
+
+```
+
+\newpage
+# Estimar o modelo
+
+```{r, echo=T, eval=T, results='markup', fig.cap='', fig.width=8, fig.height=4, fig.align='center', out.width=".7\\linewidth", warning=FALSE, message=FALSE, size='small'}
+
+# OLS estimation
+modelo_ols = systemfit(system, data=dados_reg)
+round(coef(summary(modelo_ols)), 3)
+
+```
+
+\bigskip
+
+```{r, echo=T, eval=T, results='markup', fig.cap='', fig.width=8, fig.height=4, fig.align='center', out.width=".7\\linewidth", warning=FALSE, message=FALSE, size='small'}
+
+# TSLS estimation
+modelo_tsls = systemfit(system, method='2SLS', inst=inst,
+                       data=dados_reg)
+round(coef(summary(modelo_tsls)), 3)
+
+```
