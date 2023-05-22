@@ -19,18 +19,6 @@ TSRANGE 1996 1 2022 4
 EQ> c =  a1 + a2*y
 COEFF> a1 a2
 
-COMMENT> Investimento
-BEHAVIORAL> i
-TSRANGE 1996 1 2022 4
-EQ> i = b1 + b2*c
-COEFF> b1 b2
-
-COMMENT> Governo
-BEHAVIORAL> g
-TSRANGE 1996 1 2022 4
-EQ> g = c1 + c2*y
-COEFF> c1 c2
-
 COMMENT> Exportacao
 BEHAVIORAL> x
 TSRANGE 1996 1 2022 4
@@ -80,7 +68,9 @@ Model <- ESTIMATE(Model)
 # Extendendo
 
 Model$modelData <- within(Model$modelData,{
-  us  = TSEXTEND(us,UPTO=c(2025,4),EXTMODE='LINEAR')
+  us  = TSEXTEND(us,UPTO=c(2025,4),EXTMODE='CONSTANT')
+  g   = TSEXTEND(g ,UPTO=c(2025,4),EXTMODE='MYRATE', FACTOR=1.005)
+  i   = TSEXTEND(i ,UPTO=c(2025,4),EXTMODE='MYRATE', FACTOR=1.005 )
 })
 
 Model <- SIMULATE(Model
@@ -93,16 +83,14 @@ Model <- SIMULATE(Model
 
 TABIT(Model$simulation$y)
 TABIT(Model$simulation$c)
-TABIT(Model$simulation$i)
-TABIT(Model$simulation$g)
 TABIT(Model$simulation$x)
 TABIT(Model$simulation$m)
 
 forecast <-
 data.frame(y = Model$simulation$y,
            c = Model$simulation$c,
-           i = Model$simulation$i,
-           g = Model$simulation$g,
+           i = tail(Model$modelData$i,12),
+           g = tail(Model$modelData$g,12),
            x = Model$simulation$x,
            m = Model$simulation$m)
 
