@@ -201,7 +201,12 @@ dados_reg <- dplyr::inner_join(dados_ipca, dados_ic) %>%
   dplyr::inner_join(risco_pais) %>%
   dplyr::mutate(quarter = sub('.*\\.', '', date_quarter)) %>%
   dplyr::filter(date_quarter >= 2002.1) %>%
-  dplyr::mutate(ipca_l1 = lag(ipca_total, 1),
+  dplyr::mutate
+cp = ipca_livres ~ ipca_l1 + ipca_l2 + Einf_1 + hiato_l3 + ic_l1 +
+  quarter
+is = hiato ~ hiato_l1 + juroreal_l1 + dsup
+taylor = selic ~ selic_l1 + selic_l2 + desvio + hiato_l1
+premio_swap = premio ~ premio_l1 + risco_pais(ipca_l1 = lag(ipca_total, 1),
                 ipca_l2 = lag(ipca_total, 2),
                 ipca_l3 = lag(ipca_total, 3),
                 hiato_l1 = lag(hiato,1),
@@ -220,11 +225,6 @@ dados_reg <- dplyr::inner_join(dados_ipca, dados_ic) %>%
                 #risco_pais_l1 = stats::lag(risco_pais,k=1)
                 )
 
-cp = ipca_livres ~ ipca_l1 + ipca_l2 + Einf_1 + hiato_l3 + ic_l1 +
-  quarter
-is = hiato ~ hiato_l1 + juroreal_l1 + dsup
-taylor = selic ~ selic_l1 + selic_l2 + desvio + hiato_l1
-premio_swap = premio ~ premio_l1 + risco_pais
 inst = ~ipca_l1 + ipca_l2 + ipca_l3 + Einf_1 + hiato_l2 + ic_l2 +
   quarter + hiato_l1 + juroreal_l2 + dsup + selic_l1 + selic_l2 +
   selic_l3 + desvio + premio_l2 + risco_pais_l1
