@@ -1,13 +1,14 @@
-# Experimento 3
+# Experimento 3 - MODELO ICP-1
 
+# Dados do excel
 data <- read.csv("table.csv")
 
-# BIBLIOTECAS
+# Bibliotecas
 library(bimets)
 
 # Definindo o modelo
 
-ModelDef <- "
+def_modelo <- "
 MODEL
 
 COMMENT> Modelo ultra simplificado ICP-1
@@ -31,18 +32,18 @@ TSRANGE 1996 1 2022 4
 EQ> m = e1 + e2*c + e3*i
 COEFF> e1 e2 e3
 
-COMMENT> Gross National Product
+COMMENT> Produto Interno Bruto
 IDENTITY> y
 EQ> y = c + i + g + x - m
 
 END
 "
 
-# Carrega o modelo
-Model <- LOAD_MODEL(modelText = ModelDef)
+# Carrega o modelo no bimets
+modelo <- LOAD_MODEL(modelText = def_modelo)
 
-# Carrega dados
-ModelData <- list(
+# Carrega dados formatados para o bimets
+dados_modelo <- list(
   c = TIMESERIES(data$C,
                   START=c(1996,1),FREQ=4),
   i = TIMESERIES(data$I,
@@ -62,18 +63,20 @@ ModelData <- list(
 )
 
 # Estimando o modelo
-Model <- LOAD_MODEL_DATA(Model,ModelData)
-Model <- ESTIMATE(Model)
+modelo <- LOAD_MODEL_DATA(modelo, dados_modelo)
+modelo <- ESTIMATE(modelo)
 
-# Extendendo
+# Fazendo a previsão
 
-Model$modelData <- within(Model$modelData,{
+# Premissas
+modelo$modelData <- within(modelo$modelData,{
   us  = TSEXTEND(us,UPTO=c(2025,4),EXTMODE='CONSTANT')
   g   = TSEXTEND(g ,UPTO=c(2025,4),EXTMODE='MYRATE', FACTOR=1.005)
   i   = TSEXTEND(i ,UPTO=c(2025,4),EXTMODE='MYRATE', FACTOR=1.005 )
 })
 
-Model <- SIMULATE(Model
+# Simulação
+modelo <- SIMULATE(modelo
                   ,simType='FORECAST'
                   ,TSRANGE=c(2023,1,2025,4)
                   ,simConvergence=0.00001
@@ -81,17 +84,17 @@ Model <- SIMULATE(Model
                   ,quietly=TRUE
 )
 
-TABIT(Model$simulation$y)
-TABIT(Model$simulation$c)
-TABIT(Model$simulation$x)
-TABIT(Model$simulation$m)
-
 forecast <-
-data.frame(y = Model$simulation$y,
-           c = Model$simulation$c,
-           i = tail(Model$modelData$i,12),
-           g = tail(Model$modelData$g,12),
-           x = Model$simulation$x,
-           m = Model$simulation$m)
+data.frame(y = modelo$simulation$y,
+           c = modelo$simulation$c,
+           i = tail(modelo$modelData$i,12),
+           g = tail(modelo$modelData$g,12),
+           x = modelo$simulation$x,
+           m = modelo$simulation$m)
 
+forecast
+
+# Registro
 readr::write_excel_csv2(forecast, "forecast.csv")
+dados <- as.data.frame(do.call(cbind, modelo$modelData))
+readr::write_excel_csv2(dados, "dados.csv")
